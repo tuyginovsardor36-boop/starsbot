@@ -6,6 +6,10 @@ export const orderTypeEnum = pgEnum('type', ['stars', 'premium', 'gift', 'deposi
 export const users = pgTable('users', {
   id: integer('id').primaryKey(),
   balance: integer('balance').default(0),
+  bonus: integer('bonus').default(0),
+  activity: integer('activity').default(0),
+  totalEarned: integer('total_earned').default(0),
+  totalWithdrawn: integer('total_withdrawn').default(0),
   referrals: integer('referrals').default(0),
   isBanned: boolean('is_banned').default(false),
   username: text('username'),
