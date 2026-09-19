@@ -12,6 +12,7 @@ export const users = pgTable('users', {
   totalWithdrawn: integer('total_withdrawn').default(0),
   referrals: integer('referrals').default(0),
   isBanned: boolean('is_banned').default(false),
+  isAdmin: boolean('is_admin').default(false),
   username: text('username'),
 });
 
