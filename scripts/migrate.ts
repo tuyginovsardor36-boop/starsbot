@@ -4,5 +4,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 console.log('Running Prisma database migration...');
-execSync('npx prisma db push', { stdio: 'inherit' });
+// Production'da 'migrate deploy' xavfsiz va to'g'ri buyruq
+execSync('npx prisma migrate deploy', { stdio: 'inherit' });
 console.log('Migrations completed.');
