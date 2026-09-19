@@ -1,11 +1,10 @@
 import { Telegraf, Markup } from "telegraf"
 import type { Context } from "telegraf"
-import { db } from "../src/db"
-import { users, orders } from "../src/db/schema"
-import { eq, count } from "drizzle-orm"
+import { db } from "../src/lib/firebase"
+import { FieldValue } from 'firebase-admin/firestore';
 
 type OrderType = "stars" | "premium" | "gift" | "deposit"
-type Order = typeof orders.$inferSelect
+type Order = { id: string; userId: number; username: string; type: OrderType; item: string; amount: number; createdAt: any; status: "pending" | "approved" | "cancelled" }
 
 let botInstance: Telegraf | null = null;
 const sessions = new Map<number, { action?: string }>()
@@ -27,14 +26,14 @@ const money = (value: number) => `${value.toLocaleString("uz-UZ")} so'm`
 
 async function isAdmin(ctx: Context) {
     if (!ctx.from) return false;
-    const user = await db.select().from(users).where(eq(users.id, ctx.from.id)).then(res => res[0]);
-    return user?.isAdmin ?? false;
+    const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
+    return userDoc.data()?.isAdmin ?? false;
 }
 
 async function isBanned(ctx: Context) {
     if (!ctx.from) return false;
-    const user = await db.select().from(users).where(eq(users.id, ctx.from.id)).then(res => res[0]);
-    return user?.isBanned ?? false;
+    const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
+    return userDoc.data()?.isBanned ?? false;
 }
 const username = (ctx: Context) => ctx.from?.username ? `@${ctx.from.username}` : ctx.from?.first_name ?? "Foydalanuvchi"
 
@@ -47,7 +46,22 @@ export function getBot() {
     botInstance.use(async (ctx, next) => {
         console.log(`[DEBUG] Received message from ${ctx.from?.id}: ${ctx.message && 'text' in ctx.message ? ctx.message.text : 'non-text'}`);
         if (ctx.from) {
-            await db.insert(users).values({ id: ctx.from.id, username: ctx.from.username || ctx.from.first_name }).onConflictDoNothing()
+            const userRef = db.collection('users').doc(ctx.from.id.toString());
+            const userDoc = await userRef.get();
+            if (!userDoc.exists) {
+                await userRef.set({ 
+                    id: ctx.from.id, 
+                    username: ctx.from.username || ctx.from.first_name,
+                    balance: 0,
+                    bonus: 0,
+                    activity: 0,
+                    totalEarned: 0,
+                    totalWithdrawn: 0,
+                    referrals: 0,
+                    isBanned: false,
+                    isAdmin: false
+                });
+            }
         }
         if (await isBanned(ctx)) return ctx.reply("Sizning akkauntingiz bloklangan.");
         return next()
@@ -64,7 +78,8 @@ export function getBot() {
         if (!user) return;
         
         console.log(`[DEBUG] Fetching user ${user.id} from DB`);
-        const dbUser = await db.select().from(users).where(eq(users.id, user.id)).then(res => res[0]);
+        const userDoc = await db.collection('users').doc(user.id.toString()).get();
+        const dbUser = userDoc.data();
         
         if (!dbUser) {
             console.log(`[DEBUG] User ${user.id} not found in DB`);
@@ -113,20 +128,20 @@ export function getBot() {
 
     botInstance.hears("📊 Statistika", async (ctx) => {
         if (!await isAdmin(ctx)) return;
-        const totalUsers = await db.select({count: count()}).from(users).then(res => res[0].count);
-        const pendingOrders = await db.select({count: count()}).from(orders).where(eq(orders.status, 'pending')).then(res => res[0].count);
-        const approvedOrders = await db.select({count: count()}).from(orders).where(eq(orders.status, 'approved')).then(res => res[0].count);
-        return ctx.reply(`📊 Statistika\n\n👥 Foydalanuvchilar: ${totalUsers}\n⏳ Pending: ${pendingOrders}\n✅ Tasdiqlangan: ${approvedOrders}`, adminKeyboard());
+        const usersSnapshot = await db.collection('users').count().get();
+        const pendingOrders = await db.collection('orders').where('status', '==', 'pending').count().get();
+        const approvedOrders = await db.collection('orders').where('status', '==', 'approved').count().get();
+        return ctx.reply(`📊 Statistika\n\n👥 Foydalanuvchilar: ${usersSnapshot.data().count}\n⏳ Pending: ${pendingOrders.data().count}\n✅ Tasdiqlangan: ${approvedOrders.data().count}`, adminKeyboard());
     });
     botInstance.hears("📥 Pending tranzaksiyalar", async (ctx) => { 
         if (!await isAdmin(ctx)) return; 
-        const pending = await db.select().from(orders).where(eq(orders.status, 'pending'));
-        return ctx.reply(pending.length ? pending.map((o) => `#${o.id} — ${o.username} — ${o.item} — ${money(o.amount ?? 0)}`).join("\n") : "📥 Kutilayotgan tranzaksiyalar mavjud emas.", adminKeyboard()) 
+        const pending = await db.collection('orders').where('status', '==', 'pending').get();
+        return ctx.reply(pending.size ? pending.docs.map((o) => { const d = o.data(); return `#${d.id} — ${d.username} — ${d.item} — ${money(d.amount ?? 0)}`}).join("\n") : "📥 Kutilayotgan tranzaksiyalar mavjud emas.", adminKeyboard()) 
     });
     botInstance.hears("📜 Tarix", async (ctx) => { 
         if (!await isAdmin(ctx)) return; 
-        const list = await db.select().from(orders).orderBy(orders.createdAt).limit(15);
-        return ctx.reply(list.length ? list.map((o) => `#${o.id} ${o.status === "approved" ? "✅" : o.status === "cancelled" ? "❌" : "⏳"} ${o.username} — ${o.item}`).join("\n") : "📜 Tarix bo'sh.", adminKeyboard()) 
+        const list = await db.collection('orders').orderBy('createdAt', 'desc').limit(15).get();
+        return ctx.reply(list.size ? list.docs.map((o) => { const d = o.data(); return `#${d.id} ${d.status === "approved" ? "✅" : d.status === "cancelled" ? "❌" : "⏳"} ${d.username} — ${d.item}`}).join("\n") : "📜 Tarix bo'sh.", adminKeyboard()) 
     });
     
     // Admin handlers
@@ -150,9 +165,9 @@ export function getBot() {
 
       // Broadcast Logic
       if (session.action === "broadcast") {
-        const allUsers = await db.select({id: users.id}).from(users);
-        for (const user of allUsers) {
-          await botInstance!.telegram.sendMessage(user.id, text).catch(() => {});
+        const allUsers = await db.collection('users').get();
+        for (const userDoc of allUsers.docs) {
+          await botInstance!.telegram.sendMessage(userDoc.id, text).catch(() => {});
         }
         ctx.reply("✅ Xabar barchaga yuborildi.");
         sessions.delete(ctx.from.id);
@@ -161,9 +176,9 @@ export function getBot() {
 
       // Add Admin Logic
       if (session.action === "add_admin") {
-        const userId = Number(text.replace(/[^0-9]/g, ""));
+        const userId = text.replace(/[^0-9]/g, "");
         if (userId) {
-          await db.update(users).set({isAdmin: true}).where(eq(users.id, userId));
+          await db.collection('users').doc(userId).update({isAdmin: true});
           ctx.reply(`✅ Foydalanuvchi ${userId} admin qilindi.`);
         }
         sessions.delete(ctx.from.id);
@@ -175,7 +190,7 @@ export function getBot() {
         const userId = Number(text.replace(/[^0-9]/g, ""));
         if (isNaN(userId)) return ctx.reply("Iltimos, to'g'ri ID kiriting.");
         
-        await db.update(users).set({isBanned: session.action === "ban_user"}).where(eq(users.id, userId));
+        await db.collection('users').doc(userId.toString()).update({isBanned: session.action === "ban_user"});
         ctx.reply(`✅ Foydalanuvchi ${userId} ${session.action === "ban_user" ? "ban" : "unban"} qilindi.`);
         
         sessions.delete(ctx.from.id);
