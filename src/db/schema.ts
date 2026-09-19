@@ -1,10 +1,10 @@
-import { pgTable, text, integer, timestamp, boolean, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, timestamp, boolean, pgEnum, bigint } from 'drizzle-orm/pg-core';
 
 export const orderStatusEnum = pgEnum('status', ['pending', 'approved', 'cancelled']);
 export const orderTypeEnum = pgEnum('type', ['stars', 'premium', 'gift', 'deposit']);
 
 export const users = pgTable('users', {
-  id: integer('id').primaryKey(),
+  id: bigint('id', { mode: 'number' }).primaryKey(),
   balance: integer('balance').default(0),
   bonus: integer('bonus').default(0),
   activity: integer('activity').default(0),
@@ -17,7 +17,7 @@ export const users = pgTable('users', {
 
 export const orders = pgTable('orders', {
   id: text('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id),
+  userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
   username: text('username'),
   type: orderTypeEnum('type'),
   item: text('item'),
