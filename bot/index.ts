@@ -45,6 +45,7 @@ export function getBot() {
     botInstance = new Telegraf(token)
 
     botInstance.use(async (ctx, next) => {
+        console.log(`[DEBUG] Received message from ${ctx.from?.id}: ${ctx.message && 'text' in ctx.message ? ctx.message.text : 'non-text'}`);
         if (ctx.from) {
             await db.insert(users).values({ id: ctx.from.id, username: ctx.from.username || ctx.from.first_name }).onConflictDoNothing()
         }
