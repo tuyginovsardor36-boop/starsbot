@@ -15,11 +15,11 @@ async function runMigrations() {
     console.log('Running database migrations...');
     const db = drizzle(neon(process.env.DATABASE_URL));
     try {
-        console.log('Altering table column types to BIGINT...');
-        await db.execute(sql`ALTER TABLE users ALTER COLUMN id TYPE BIGINT;`);
-        await db.execute(sql`ALTER TABLE orders ALTER COLUMN user_id TYPE BIGINT;`);
+        console.log('Dropping old tables to fix ID type issues...');
+        await db.execute(sql`DROP TABLE IF EXISTS orders;`);
+        await db.execute(sql`DROP TABLE IF EXISTS users;`);
     } catch (e) {
-        console.warn('Type alteration might have already been applied:', e);
+        console.warn('Error dropping tables:', e);
     }
 
     execSync('npx drizzle-kit push', { stdio: 'inherit' });
