@@ -58,11 +58,20 @@ export function getBot() {
     })
 
     botInstance.hears("💼 Profile", async (ctx) => {
-      const user = ctx.from;
-      if (!user) return;
-      const dbUser = await db.select().from(users).where(eq(users.id, user.id)).then(res => res[0]);
-      
-      const profileText = `💼 **SHAXSIY PROFIL**
+      console.log(`[DEBUG] Profile command received from ${ctx.from?.id}`);
+      try {
+        const user = ctx.from;
+        if (!user) return;
+        
+        console.log(`[DEBUG] Fetching user ${user.id} from DB`);
+        const dbUser = await db.select().from(users).where(eq(users.id, user.id)).then(res => res[0]);
+        
+        if (!dbUser) {
+            console.log(`[DEBUG] User ${user.id} not found in DB`);
+            return ctx.reply("Siz bazada topilmadingiz.");
+        }
+
+        const profileText = `💼 **SHAXSIY PROFIL**
 
 👤 Ism: ${user?.first_name ?? "User"}
 🔗 Username: ${username(ctx)}
@@ -81,7 +90,13 @@ export function getBot() {
 🛡️ Akkaunt: Tasdiqlangan
 
 ⚡️ Profilingiz orqali hisobingizni boshqaring.`;
-      return ctx.replyWithMarkdown(profileText, mainKeyboard());
+        
+        console.log(`[DEBUG] Replying to profile command`);
+        return await ctx.replyWithMarkdown(profileText, mainKeyboard());
+      } catch (e) {
+        console.error(`[ERROR] Profile handler error:`, e);
+        return ctx.reply("Profilni yuklashda xatolik yuz berdi.");
+      }
     });
     
     // ... rest of the handlers ...
