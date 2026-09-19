@@ -1,18 +1,16 @@
 import { Telegraf, Markup } from "telegraf"
 import type { Context } from "telegraf"
+import { db } from "../src/db"
+import { users, orders } from "../src/db/schema"
+import { eq } from "drizzle-orm"
 
 type OrderType = "stars" | "premium" | "gift" | "deposit"
-type Order = { id: string; userId: number; username: string; type: OrderType; item: string; amount: number; createdAt: Date; status: "pending" | "approved" | "cancelled" }
+type Order = typeof orders.$inferSelect
 
 let botInstance: Telegraf | null = null;
 const adminIds = new Set((process.env.TELEGRAM_ADMIN_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean))
-const orders = new Map<string, Order>()
-const balances = new Map<number, number>()
-const referrals = new Map<number, number>()
 const bannedUsers = new Set<number>()
-const userIds = new Set<number>()
 const sessions = new Map<number, { action?: string }>()
-let orderSequence = 1000
 
 const mainKeyboard = () => Markup.keyboard([
   ["💼 Profile", "⭐ Stars sotib olish"], ["🎁 Gift sotib olish", "🏆 Premium sotib olish"],
@@ -28,11 +26,6 @@ const money = (value: number) => `${value.toLocaleString("uz-UZ")} so'm`
 const isAdmin = (ctx: Context) => Boolean(ctx.from && adminIds.has(String(ctx.from.id)))
 const isBanned = (ctx: Context) => Boolean(ctx.from && bannedUsers.has(ctx.from.id))
 const username = (ctx: Context) => ctx.from?.username ? `@${ctx.from.username}` : ctx.from?.first_name ?? "Foydalanuvchi"
-const balance = (id: number) => balances.get(id) ?? 0
-
-function orderButtons(order: Order) {
-  return Markup.inlineKeyboard([[Markup.button.callback("✅ Tasdiqlash", `approve:${order.id}`), Markup.button.callback("❌ Bekor qilish", `cancel:${order.id}`)]])
-}
 
 export function getBot() {
   if (!botInstance) {
@@ -40,44 +33,62 @@ export function getBot() {
     if (!token) throw new Error("TELEGRAM_BOT_TOKEN muhit o'zgaruvchisi topilmadi")
     botInstance = new Telegraf(token)
 
-    async function notifyAdmins(order: Order) {
-      const text = `🔔 Yangi buyurtma #${order.id}\n\n👤 ${order.username}\n🆔 ${order.userId}\n📦 ${order.item}\n💵 ${money(order.amount)}\n\nHolat: ⏳ Kutilmoqda`
-      for (const admin of adminIds) await botInstance!.telegram.sendMessage(admin, text, orderButtons(order)).catch(() => undefined)
-    }
-    async function createOrder(ctx: Context, type: OrderType, item: string, amount: number) {
-      if (!ctx.from) return
-      const order: Order = { id: String(++orderSequence), userId: ctx.from.id, username: username(ctx), type, item, amount, createdAt: new Date(), status: "pending" }
-      orders.set(order.id, order); await notifyAdmins(order)
-      sessions.delete(ctx.from.id)
-      await ctx.reply(`✅ Buyurtmangiz qabul qilindi.\n\n📦 ${item}\n💵 ${money(amount)}\n🧾 Buyurtma: #${order.id}\n\nAdmin tasdiqlashini kuting.`, mainKeyboard())
-    }
+    botInstance.use(async (ctx, next) => {
+        if (ctx.from) {
+            // Ensure user exists in DB
+            await db.insert(users).values({ id: ctx.from.id, username: ctx.from.username || ctx.from.first_name }).onConflictDoNothing()
+        }
+        if (isBanned(ctx)) return ctx.reply("Sizning akkauntingiz bloklangan.");
+        return next()
+    })
+    
+    botInstance.start(async (ctx) => {
+        // ... (existing logic)
+        await ctx.reply(`Assalomu alaykum, ${ctx.from?.first_name ?? "foydalanuvchi"}!\n\nStars botga xush kelibsiz. Kerakli bo'limni tanlang:`, mainKeyboard())
+    })
 
-    botInstance.use(async (ctx, next) => { if (ctx.from) userIds.add(ctx.from.id); if (isBanned(ctx)) return ctx.reply("Sizning akkauntingiz bloklangan."); return next() })
-    botInstance.start(async (ctx) => { const ref = ctx.startPayload; if (ref?.startsWith("REF")) referrals.set(Number(ref.slice(3)), (referrals.get(Number(ref.slice(3))) ?? 0) + 1); await ctx.reply(`Assalomu alaykum, ${ctx.from?.first_name ?? "foydalanuvchi"}!\n\nStars botga xush kelibsiz. Kerakli bo'limni tanlang:`, mainKeyboard()) })
-
-    botInstance.hears("💼 Profile", (ctx) => {
+    botInstance.hears("💼 Profile", async (ctx) => {
       const user = ctx.from;
+      if (!user) return;
+      const dbUser = await db.select().from(users).where(eq(users.id, user.id)).then(res => res[0]);
+      
       const profileText = `💼 **SHAXSIY PROFIL**
 
 👤 Ism: ${user?.first_name ?? "User"}
 🔗 Username: ${username(ctx)}
 🆔 Telegram ID: ${user?.id}
 
-💰 Balans: ${money(balance(user?.id ?? 0))}
-🎁 Takliflar: ${referrals.get(user?.id ?? 0) ?? 0} ta
-💎 Bonuslar: ${money(0)}
-📈 Faollik: 0 ball
+💰 Balans: ${money(dbUser?.balance ?? 0)}
+🎁 Takliflar: ${dbUser?.referrals ?? 0} ta
+💎 Bonuslar: ${money(dbUser?.bonus ?? 0)}
+📈 Faollik: ${dbUser?.activity ?? 0} ball
 
-💳 Jami daromad: ${money(0)}
-💸 Jami yechilgan: ${money(0)}
+💳 Jami daromad: ${money(dbUser?.totalEarned ?? 0)}
+💸 Jami yechilgan: ${money(dbUser?.totalWithdrawn ?? 0)}
 📊 Tranzaksiyalar: 0 ta
 
-🟢 Holat: Faol
+🟢 Holat: ${dbUser?.isBanned ? "🔴 Bloklangan" : "🟢 Faol"}
 🛡️ Akkaunt: Tasdiqlangan
 
 ⚡️ Profilingiz orqali hisobingizni boshqaring.`;
       return ctx.replyWithMarkdown(profileText, mainKeyboard());
     });
+    
+    // ... rest of the handlers ...
+    botInstance.hears("⭐ Stars sotib olish", (ctx) => ctx.reply("⭐ Stars sotib olish\n\nPaketni tanlang:", Markup.inlineKeyboard([[Markup.button.callback("⭐ 50 Stars — 10 000 so'm", "stars:50:10000")], [Markup.button.callback("⭐ 100 Stars — 19 000 so'm", "stars:100:19000")], [Markup.button.callback("⭐ 500 Stars — 90 000 so'm", "stars:500:90000")], [Markup.button.callback("🔙 Orqaga", "back")]])));
+    botInstance.hears("🎁 Gift sotib olish", (ctx) => ctx.reply("🎁 Gift sotib olish\n\nGiftni tanlang:", Markup.inlineKeyboard([[Markup.button.callback("🎁 Heart — 15 000 so'm", "gift:Heart:15000")], [Markup.button.callback("🎁 Rose — 25 000 so'm", "gift:Rose:25000")], [Markup.button.callback("🎁 Premium Gift — 50 000 so'm", "gift:Premium Gift:50000")], [Markup.button.callback("🔙 Orqaga", "back")]])));
+    botInstance.hears("🏆 Premium sotib olish", (ctx) => ctx.reply("🏆 Premium sotib olish\n\nMuddatni tanlang:", Markup.inlineKeyboard([[Markup.button.callback("1 oy — 45 000 so'm", "premium:1 oy:45000")], [Markup.button.callback("3 oy — 110 000 so'm", "premium:3 oy:110000")], [Markup.button.callback("12 oy — 350 000 so'm", "premium:12 oy:350000")], [Markup.button.callback("🔙 Orqaga", "back")]])));
+    botInstance.hears("💰 Hisob to'ldirish", (ctx) => { sessions.set(ctx.from.id, { action: "deposit" }); return ctx.reply("💰 Hisob to'ldirish\n\nTo'lov summasini so'mda yozing. Masalan: 50000", cancelKeyboard()) });
+    botInstance.hears("💳 Hisobim", (ctx) => ctx.reply(`💳 Hisobingiz\n\n💰 Balans: ${money(balance(ctx.from.id))}`, mainKeyboard()));
+    botInstance.hears("🔗 Referral", (ctx) => ctx.reply(`🔗 Referral\n\nSizning kodingiz: REF${ctx.from.id}\nHavola: https://t.me/${ctx.botInfo.username}?start=REF${ctx.from.id}\n\nTakliflar: ${referrals.get(ctx.from.id) ?? 0}`, mainKeyboard()));
+    botInstance.hears("🆘 Support", (ctx) => ctx.reply("🆘 Support\n\nOperator: @support_username\nMurojaatingizni shu yerga yozing.", mainKeyboard()));
+    botInstance.hears("❌ Bekor qilish", (ctx) => { if (ctx.from) sessions.delete(ctx.from.id); return ctx.reply("Amal bekor qilindi.", mainKeyboard()) });
+    botInstance.hears("🛠 Admin panel", (ctx) => isAdmin(ctx) ? ctx.reply("🛠 Admin panel:", adminKeyboard()) : ctx.reply("Sizda admin huquqi mavjud emas.", mainKeyboard()));
+    botInstance.hears("🔙 Orqaga", (ctx) => ctx.reply("Asosiy menyu:", mainKeyboard()));
+
+    botInstance.hears("📊 Statistika", (ctx) => isAdmin(ctx) ? ctx.reply(`📊 Statistika\n\n👥 Foydalanuvchilar: ${userIds.size}\n⏳ Pending: ${[...orders.values()].filter((o) => o.status === "pending").length}\n✅ Tasdiqlangan: ${[...orders.values()].filter((o) => o.status === "approved").length}`, adminKeyboard()) : undefined);
+    botInstance.hears("📥 Pending tranzaksiyalar", (ctx) => { if (!isAdmin(ctx)) return; const pending = [...orders.values()].filter((o) => o.status === "pending"); return ctx.reply(pending.length ? pending.map((o) => `#${o.id} — ${o.username} — ${o.item} — ${money(o.amount)}`).join("\n") : "📥 Kutilayotgan tranzaksiyalar mavjud emas.", adminKeyboard()) });
+    botInstance.hears("📜 Tarix", (ctx) => { if (!isAdmin(ctx)) return; const list = [...orders.values()].slice(-15).reverse(); return ctx.reply(list.length ? list.map((o) => `#${o.id} ${o.status === "approved" ? "✅" : o.status === "cancelled" ? "❌" : "⏳"} ${o.username} — ${o.item}`).join("\n") : "📜 Tarix bo'sh.", adminKeyboard()) });
     
     // Admin handlers
     botInstance.hears("📣 Post yuborish", (ctx) => {
@@ -146,6 +157,6 @@ export function getBot() {
   return botInstance
 }
 
-if (process.env.VERCEL !== "1" && process.env.TELEGRAM_WEBHOOK_MODE !== "true") {
+if (process.env.VERCEL !== "1" && process.env.TELEGRAM_WEBHOOK_MODE !== "true" && process.env.TELEGRAM_BOT_TOKEN) {
   getBot().launch().then(() => console.log("[v0] Stars bot polling orqali ishga tushdi"))
 }
