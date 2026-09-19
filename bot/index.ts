@@ -1,11 +1,8 @@
 import { Telegraf, Markup } from "telegraf"
 import type { Context } from "telegraf"
-import { db } from "../src/db"
-import { users, orders } from "../src/db/schema"
-import { eq, desc, count } from "drizzle-orm"
+import { prisma as db } from "../src/lib/prisma"
 
 type OrderType = "stars" | "premium" | "gift" | "deposit"
-type Order = typeof orders.$inferSelect
 
 let botInstance: Telegraf | null = null;
 const sessions = new Map<number, { action?: string }>()
@@ -30,13 +27,13 @@ const money = (value: number) => `${value.toLocaleString("uz-UZ")} so'm`
 
 async function isAdmin(ctx: Context) {
     if (!ctx.from) return false;
-    const user = await db.select().from(users).where(eq(users.id, ctx.from.id.toString())).then(res => res[0]);
+    const user = await db.user.findUnique({ where: { id: ctx.from.id.toString() } });
     return user?.isAdmin ?? false;
 }
 
 async function isBanned(ctx: Context) {
     if (!ctx.from) return false;
-    const user = await db.select().from(users).where(eq(users.id, ctx.from.id.toString())).then(res => res[0]);
+    const user = await db.user.findUnique({ where: { id: ctx.from.id.toString() } });
     return user?.isBanned ?? false;
 }
 const username = (ctx: Context) => ctx.from?.username ? `@${ctx.from.username}` : ctx.from?.first_name ?? "Foydalanuvchi"
@@ -49,7 +46,11 @@ export function getBot() {
 
     botInstance.use(async (ctx, next) => {
         if (ctx.from) {
-            await db.insert(users).values({ id: ctx.from.id.toString(), username: ctx.from.username || ctx.from.first_name }).onConflictDoNothing()
+            await db.user.upsert({
+                where: { id: ctx.from.id.toString() },
+                update: {},
+                create: { id: ctx.from.id.toString(), username: ctx.from.username || ctx.from.first_name }
+            })
         }
         if (await isBanned(ctx)) return ctx.reply("Sizning akkauntingiz bloklangan.");
         return next()
@@ -62,7 +63,8 @@ export function getBot() {
     botInstance.hears("💼 Profile", async (ctx) => {
       const user = ctx.from;
       if (!user) return;
-      const dbUser = await db.select().from(users).where(eq(users.id, user.id.toString())).then(res => res[0]);
+      
+      const dbUser = await db.user.findUnique({ where: { id: user.id.toString() } });
       
       if (!dbUser) return ctx.reply("Siz bazada topilmadingiz.");
 
@@ -91,7 +93,7 @@ export function getBot() {
     botInstance.hears("🏆 Premium sotib olish", (ctx) => ctx.reply("Muddatni tanlang:", mainKeyboard()));
     botInstance.hears("💰 Hisob to'ldirish", (ctx) => ctx.reply("To'lov summasini so'mda yozing. Masalan: 50000", cancelKeyboard()));
     botInstance.hears("💳 Hisobim", async (ctx) => {
-        const dbUser = await db.select().from(users).where(eq(users.id, ctx.from.id.toString())).then(res => res[0]);
+        const dbUser = await db.user.findUnique({ where: { id: ctx.from.id.toString() } });
         ctx.reply(`💳 Hisobingiz: ${money(dbUser?.balance ?? 0)}`, mainKeyboard());
     });
     
@@ -101,6 +103,5 @@ export function getBot() {
     botInstance.hears("🛠 Admin panel", async (ctx) => await isAdmin(ctx) ? ctx.reply("🛠 Admin panel:", adminKeyboard()) : ctx.reply("Sizda admin huquqi mavjud emas.", mainKeyboard()));
     botInstance.hears("🔙 Asosiy menyu", (ctx) => ctx.reply("Asosiy menyu:", mainKeyboard()));
 
-    // ... Admin handlers and text handler ...
     return botInstance
 }
